@@ -107,7 +107,7 @@ print("\n--- cProfile Output ---")
 cProfile.run("(A + B) @ (A - B) ** 2")
 ```
 
-![image alt](https://github.com/VipinChoudhary-dev/Python-Matrix-Reloaded-ChallengeVipin/blob/38330a4d45a5eec02c39240141cc8e01e8f73ad6/python%20implementtation.png)
+![image alt](https://github.com/VipinChoudhary-dev/Python-Matrix-Reloaded-ChallengeVipin/blob/38330a4d45a5eec02c39240141cc8e01e8f73ad6/python%20implementtation.png?raw=true)
 
 
 ### 2.2 Cython (matrix_cy.pyx + setup.py)
