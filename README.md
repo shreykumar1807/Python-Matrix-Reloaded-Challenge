@@ -107,43 +107,104 @@ print("\n--- cProfile Output ---")
 cProfile.run("(A + B) @ (A - B) ** 2")
 ```
 
-#### Output : 
 
+### 2.2 Cython (matrix_cy.pyx + setup.py)
 
+```python
+import numpy as np
+cimport numpy as np
 
+cdef class MatrixCy:
+    cdef np.ndarray data
 
-## 📥 Submission Instructions
+    def __init__(self, data):
+        if isinstance(data, list):
+            data = np.array(data, dtype=np.double)
+        elif not isinstance(data, np.ndarray):
+            raise TypeError("Data must be list or ndarray")
+        if data.ndim == 1:
+            data = np.expand_dims(data, 0)
+        if data.ndim != 2:
+            raise ValueError("Only 2D arrays allowed")
+        self.data = data.astype(np.double)
 
-1. **Fork** this repository.
-2. Add your completed files to your forked repository.
-3. **Name your files using the following format**:
+    def __add__(self, MatrixCy other):
+        return MatrixCy(self.data + other.data)
 
+    def __sub__(self, MatrixCy other):
+        return MatrixCy(self.data - other.data)
+
+    def __matmul__(self, MatrixCy other):
+        return MatrixCy(self.data.dot(other.data))
+
+    def __pow__(self, int power):
+        cdef int i, j
+        cdef int rows = self.data.shape[0]
+        cdef int cols = self.data.shape[1]
+        cdef np.ndarray[np.double_t, ndim=2] out = np.empty((rows, cols), dtype=np.double)
+        cdef double[:, :] in_view = self.data
+        cdef double[:, :] out_view = out
+        for i in range(rows):
+            for j in range(cols):
+                out_view[i, j] = in_view[i, j] ** power
+        return MatrixCy(out)
+
+    @property
+    def data_view(self):
+        """Expose the underlying NumPy array to Python."""
+        return self.data
 ```
-matrix_challenge_<Name>_<USN>.py
-report_<Name>_<USN>.md
+
+
+
+## 3. Profiling, Timing, and Memory Usage Report
+
+### 3.1 Matrix Operation
+Expression evaluated:
+```python
+(A + B) @ (A - B) ** 2
 ```
-
-4. **Create a Pull Request** to this repository **before the deadline**.
-
-
-
-## 🗂️ Files to Submit
-
-- `matrix_challenge_<Name>_<USN>.py`
-- `report_<Name>_<USN>.md`
-
-Your report should include:
-
-- Profiling outputs (`cProfile`, `line_profiler`)
-- Time and memory comparisons (before vs after optimization)
-- Explanation of optimizations and their impact
+Result:
+ [[144 100]
+ [400 324]]
 
 
+ ### 3.2 Timing Comparison
 
-## 💎 Bonus
+ | Version     | Execution Time (seconds) |
+| ----------- | ------------------------ |
+| Pure Python | 0.000028                 |
+| Cython      | 0.000008                 |
 
-Re-implement part of your Matrix class in **Cython** for additional performance gains.
+Improvement: ~3.5× faster with Cython
+
+
+### 3.4 Memory Usage Comparison
+
+| Version     | Current Memory Usage | Peak Memory Usage |
+| ----------- | -------------------- | ----------------- |
+| Pure Python | 0.45 KB              | 0.61 KB           |
+| Cython      | 0.30 KB              | 0.40 KB           |
+
+Improvement: Memory usage reduced by ~33%
+
+
+### 3.5 Optimization Techniques Applied
+
+Converted the Matrix class to use __slots__ to reduce memory overhead
+
+Moved numerical operations to Cython for faster array operations
+
+Avoided unnecessary object creation during matrix operations
+
+
+### 3.6 Impact of Optimizations
+
+Execution Time: Reduced by ~3.5× due to compiled C-level matrix operations
+
+Memory Usage: Reduced by ~33% with __slots__ and less overhead
+
+Function Calls: Reduced runtime function calls with Cython compilation
 
 
 
-Happy Hacking! 🧠💻
