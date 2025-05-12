@@ -106,8 +106,9 @@ tracemalloc.stop()
 print("\n--- cProfile Output ---")
 cProfile.run("(A + B) @ (A - B) ** 2")
 ```
+<img width="688" alt="python implementtation" src="https://github.com/user-attachments/assets/cac74599-1e39-4501-bbd8-e7e24a90743c" />
 
-![image alt](https://github.com/VipinChoudhary-dev/Python-Matrix-Reloaded-ChallengeVipin/blob/38330a4d45a5eec02c39240141cc8e01e8f73ad6/python%20implementtation.png?raw=true)
+
 
 
 ### 2.2 Cython (matrix_cy.pyx + setup.py)
@@ -156,7 +157,7 @@ cdef class MatrixCy:
         """Expose the underlying NumPy array to Python."""
         return self.data
 ```
-![image alt](https://github.com/VipinChoudhary-dev/Python-Matrix-Reloaded-Challenge-Vipin/blob/38330a4d45a5eec02c39240141cc8e01e8f73ad6/matrix_cy.pyx)
+<img width="431" alt="Cython Implementation" src="https://github.com/user-attachments/assets/92ddfe12-799b-4069-b735-9f7fae916965" />
 
 ## 3. Profiling, Timing, and Memory Usage Report
 
