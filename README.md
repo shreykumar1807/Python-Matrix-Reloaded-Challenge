@@ -1,7 +1,27 @@
 
-# 🧠 Matrix Operations Challenge
+# 🧠 Matrix Operations: Python vs. Cython Implementation By Vipin Choudhary
 
-Welcome to the **Matrix Operations Challenge**, hosted as part of the **"Python Matrix Reloaded" Workshop**! This challenge will test your ability to implement and optimize a custom Matrix class in Python.
+## 1. Introduction
+
+This report compares two implementations of a custom `Matrix` class supporting:
+
+- **Addition (`+`)**
+- **Subtraction (`-`)**
+- **Matrix multiplication (`@`)**
+- **Element-wise exponentiation (`**`)**
+
+### Implementations
+
+- **Pure Python version**: `matrix_challenge.py`  
+- **Cython-accelerated version**: `matrix_cy.pyx` + `setup.py`
+
+### We Measure
+
+- **Correctness** (outputs)
+- **Execution time** (before vs. after)
+- **Memory usage** (before vs. after)
+- **Profiling** (cProfile breakdown)
+- **Optimizations and their impact**
 
 
 
