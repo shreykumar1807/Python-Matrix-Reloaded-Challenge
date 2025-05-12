@@ -1,0 +1,21 @@
+# Matrix Operations Challenge – Report by Shrey
+
+## Profiling Output (cProfile)
+
+Paste your cProfile output here.
+
+## Memory Usage
+- Peak: 6.25 KB (example)
+
+## Execution Time
+- Before Optimization: 0.000058s
+
+## Optimizations
+- Used __slots__ to save memory
+- Broadcasting used via NumPy
+- Removed unnecessary copies
+
+## Learnings
+- Learned memory profiling, performance tuning and Matrix operations in Python
+
+
