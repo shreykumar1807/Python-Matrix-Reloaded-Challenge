@@ -1,0 +1,346 @@
+import numpy as np
+import time
+import tracemalloc
+import cProfile
+import io
+import pstats
+import os
+import sys
+
+# This section handles Cython compilation and import
+def setup_cython():
+    """Set up and compile the Cython extension if not already compiled"""
+    # First try direct import (if already compiled)
+    try:
+        from matrix_ops_cy import fast_matmul, fast_power, fast_add, fast_subtract
+        print("Using pre-compiled Cython modules")
+        return fast_matmul, fast_power, fast_add, fast_subtract, True
+    except ImportError:
+        pass
+        
+    # If not compiled yet, try compiling on the fly with pyximport
+    try:
+        import pyximport
+        pyximport.install(setup_args={"include_dirs": np.get_include()})
+        try:
+            from matrix_ops_cy import fast_matmul, fast_power, fast_add, fast_subtract
+            print("Using just-in-time compiled Cython modules")
+            return fast_matmul, fast_power, fast_add, fast_subtract, True
+        except ImportError:
+            print("Failed to import Cython modules - file might be missing")
+    except ImportError:
+        print("pyximport not available - trying manual compilation")
+    
+    # If pyximport didn't work, try manual compilation
+    try:
+        # Check if matrix_ops_cy.pyx exists
+        if not os.path.exists("matrix_ops_cy.pyx"):
+            print("matrix_ops_cy.pyx not found - Cython optimization disabled")
+            return None, None, None, None, False
+
+        # Create and run setup.py dynamically
+        from setuptools import setup, Extension
+        from Cython.Build import cythonize
+        
+        extensions = [
+            Extension(
+                "matrix_ops_cy",
+                ["matrix_ops_cy.pyx"],
+                include_dirs=[np.get_include()],
+                language="c++"
+            )
+        ]
+        
+        sys.argv = [sys.argv[0], "build_ext", "--inplace"]
+        setup(
+            name="matrix_operations",
+            ext_modules=cythonize(extensions),
+        )
+        
+        # Try importing again
+        from matrix_ops_cy import fast_matmul, fast_power, fast_add, fast_subtract
+        print("Using manually compiled Cython modules")
+        return fast_matmul, fast_power, fast_add, fast_subtract, True
+    except Exception as e:
+        print(f"Cython compilation failed: {e}")
+        print("Using NumPy fallback")
+        return None, None, None, None, False
+
+# Initialize Cython modules
+fast_matmul, fast_power, fast_add, fast_subtract, CYTHON_AVAILABLE = setup_cython()
+
+class Matrix:
+    """
+    A 2D Matrix class supporting basic operations and broadcasting.
+    Internally uses NumPy for performance but encapsulates it for educational purposes.
+    """
+    __slots__ = ['data']  # Using __slots__ for memory optimization
+
+    def __init__(self, data):
+        """
+        Initialize the Matrix with a list of lists or a NumPy array.
+        Must be 2-dimensional.
+        """
+        if isinstance(data, list):
+            # Handle 1D list case by making it 2D
+            if isinstance(data[0], (int, float)):
+                data = [data]
+            data = np.array(data)
+        elif isinstance(data, np.ndarray) and data.ndim == 1:
+            # Convert 1D numpy arrays to 2D for consistent handling
+            data = data.reshape(1, -1)
+        
+        if not isinstance(data, np.ndarray):
+            raise TypeError("Data must be a list or NumPy array")
+        if data.ndim != 2:
+            raise ValueError("Only 2D matrices are supported (got dimension {})".format(data.ndim))
+        
+        self.data = data
+
+    def __add__(self, other):
+        """
+        Add two matrices. Supports broadcasting.
+        """
+        if isinstance(other, (int, float)):
+            # Scalar addition
+            return Matrix(self.data + other)
+        elif isinstance(other, Matrix):
+            # Matrix addition with broadcasting
+            if CYTHON_AVAILABLE and fast_add is not None:
+                return Matrix(fast_add(self.data, other.data))
+            else:
+                return Matrix(self.data + other.data)
+        else:
+            raise TypeError("Unsupported operand type for +")
+
+    def __sub__(self, other):
+        """
+        Subtract two matrices. Supports broadcasting.
+        """
+        if isinstance(other, (int, float)):
+            # Scalar subtraction
+            return Matrix(self.data - other)
+        elif isinstance(other, Matrix):
+            # Matrix subtraction with broadcasting
+            if CYTHON_AVAILABLE and fast_subtract is not None:
+                return Matrix(fast_subtract(self.data, other.data))
+            else:
+                return Matrix(self.data - other.data)
+        else:
+            raise TypeError("Unsupported operand type for -")
+
+    def __mul__(self, other):
+        """
+        Element-wise multiplication. Supports broadcasting.
+        """
+        if isinstance(other, (int, float)):
+            # Scalar multiplication
+            return Matrix(self.data * other)
+        elif isinstance(other, Matrix):
+            # Element-wise multiplication with broadcasting
+            return Matrix(self.data * other.data)
+        else:
+            raise TypeError("Unsupported operand type for *")
+
+    def __matmul__(self, other):
+        """
+        Matrix multiplication (dot product).
+        """
+        if isinstance(other, Matrix):
+            try:
+                if CYTHON_AVAILABLE and fast_matmul is not None:
+                    result = fast_matmul(self.data, other.data)
+                else:
+                    result = np.matmul(self.data, other.data)
+                return Matrix(result)
+            except ValueError as e:
+                raise ValueError(f"Matrix multiplication error: {e}")
+        else:
+            raise TypeError("Unsupported operand type for @")
+
+    def __pow__(self, power):
+        """
+        Raise each element to a given power.
+        """
+        if isinstance(power, (int, float)):
+            if CYTHON_AVAILABLE and fast_power is not None:
+                return Matrix(fast_power(self.data, power))
+            else:
+                return Matrix(np.power(self.data, power))
+        else:
+            raise TypeError("Power must be a number")
+
+    def __str__(self):
+        return str(self.data)
+
+    def __repr__(self):
+        return f"Matrix({repr(self.data)})"
+
+    @property
+    def shape(self):
+        return self.data.shape
+
+
+def evaluate_complex_expression(A, B, repetitions=100):
+    """
+    Evaluate the expression (A + B) @ (A - B) ** 2 and measure performance.
+    """
+    # Correctness check
+    print("=== Evaluating expression: (A + B) @ (A - B) ** 2 ===")
+    print(f"Matrix A:\n{A}")
+    print(f"Matrix B:\n{B}")
+    
+    result = (A + B) @ (A - B) ** 2
+    print(f"\nResult:\n{result}")
+    
+    # Reference calculation using NumPy directly
+    numpy_result = np.matmul((A.data + B.data), np.power((A.data - B.data), 2))
+    print(f"\nReference NumPy result:\n{numpy_result}")
+    print(f"Results match: {np.array_equal(result.data, numpy_result)}")
+    
+    # Time measurement
+    print("\n=== Performance Measurements ===")
+    start_time = time.perf_counter()
+    
+    for _ in range(repetitions):
+        (A + B) @ (A - B) ** 2
+    
+    end_time = time.perf_counter()
+    elapsed = end_time - start_time
+    print(f"Average execution time ({repetitions} runs): {elapsed/repetitions:.6f} seconds")
+    
+    return result
+
+def measure_memory_usage():
+    """
+    Measure memory usage of the complex expression.
+    """
+    print("\n=== Memory Usage Analysis ===")
+    
+    # Initialize matrices
+    A = Matrix([[1, 2], [3, 4]])
+    B = Matrix([[5], [6]])  # Will broadcast to shape (2,2)
+    
+    # Start memory tracking
+    tracemalloc.start()
+    before_memory = tracemalloc.get_traced_memory()
+    
+    # Execute the expression
+    result = (A + B) @ (A - B) ** 2
+    
+    # Measure memory after execution
+    after_memory = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    
+    print(f"Memory before: {before_memory[0]/1024:.2f} KB, peak: {before_memory[1]/1024:.2f} KB")
+    print(f"Memory after: {after_memory[0]/1024:.2f} KB, peak: {after_memory[1]/1024:.2f} KB")
+    print(f"Difference: {(after_memory[0] - before_memory[0])/1024:.2f} KB")
+    
+    return result
+
+def profile_expression():
+    """
+    Profile the complex expression using cProfile.
+    """
+    print("\n=== cProfile Analysis ===")
+    
+    # Initialize matrices
+    A = Matrix([[1, 2], [3, 4]])
+    B = Matrix([[5], [6]])
+    
+    # Profile with cProfile
+    profiler = cProfile.Profile()
+    profiler.enable()
+    
+    # Run the expression multiple times for better profiling
+    for _ in range(1000):
+        (A + B) @ (A - B) ** 2
+    
+    profiler.disable()
+    
+    # Print profiling results
+    s = io.StringIO()
+    ps = pstats.Stats(profiler, stream=s).sort_stats('cumulative')
+    ps.print_stats(15)  # Print top 15 lines
+    print(s.getvalue())
+
+
+def run_benchmark_comparison():
+    """Compare pure NumPy vs Cython implementations"""
+    if not CYTHON_AVAILABLE:
+        print("\n=== Cannot run comparison - Cython not available ===")
+        return
+        
+    print("\n=== Benchmark: Pure NumPy vs Cython ===")
+    A = Matrix([[1, 2], [3, 4]])
+    B = Matrix([[5], [6]])
+    
+    # Temporarily disable Cython
+    global fast_matmul, fast_power, fast_add, fast_subtract
+    saved_funcs = (fast_matmul, fast_power, fast_add, fast_subtract)
+    fast_matmul, fast_power, fast_add, fast_subtract = None, None, None, None
+    
+    # Benchmark NumPy
+    print("Running NumPy benchmark...")
+    numpy_start = time.perf_counter()
+    for _ in range(1000):
+        (A + B) @ (A - B) ** 2
+    numpy_time = time.perf_counter() - numpy_start
+    
+    # Restore Cython functions
+    fast_matmul, fast_power, fast_add, fast_subtract = saved_funcs
+    
+    # Benchmark Cython
+    print("Running Cython benchmark...")
+    cython_start = time.perf_counter()
+    for _ in range(1000):
+        (A + B) @ (A - B) ** 2
+    cython_time = time.perf_counter() - cython_start
+    
+    # Report results
+    print(f"NumPy time: {numpy_time:.6f} seconds")
+    print(f"Cython time: {cython_time:.6f} seconds")
+    if cython_time < numpy_time:
+        speedup = numpy_time / cython_time
+        print(f"Cython is {speedup:.2f}x faster")
+    else:
+        slowdown = cython_time / numpy_time
+        print(f"Cython is {slowdown:.2f}x slower (this is unusual)")
+
+
+# Main execution
+if __name__ == "__main__":
+    print("=== Matrix Operations Challenge ===")
+    print(f"Using Cython acceleration: {CYTHON_AVAILABLE}")
+    
+    A = Matrix([[1, 2], [3, 4]])
+    B = Matrix([[5], [6]])  # Will broadcast to match A's shape
+    
+    # Evaluate complex expression
+    evaluate_complex_expression(A, B)
+    
+    # Memory usage measurement
+    measure_memory_usage()
+    
+    # Profile function calls
+    profile_expression()
+    
+    # Compare NumPy vs Cython implementations
+    if CYTHON_AVAILABLE:
+        run_benchmark_comparison()
+    
+    print("\nNote: For line-by-line profiling, run this script with:")
+    print("kernprof -l -v matrix_challenge.py")
+# Uncomment the code below if you're using line_profiler
+    """
+    # Line profiler example:
+    @profile
+    def profiled_operation():
+        A = Matrix([[1, 2], [3, 4]])
+        B = Matrix([[5], [6]])  # Will broadcast
+        return (A + B) @ (A - B) ** 2
+        
+    profiled_operation()
+    """
+
+# Optional: Cython optimization would be in a separate .pyx file
