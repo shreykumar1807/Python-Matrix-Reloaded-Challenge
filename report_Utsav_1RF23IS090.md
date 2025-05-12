@@ -16,4 +16,4 @@ Eliminated intermediate variables.
 
 Reordered complex calculations to minimize redundancy.
 
-![Image Alt]([image_url](https://github.com/utsav-upadhyay-21/Python-Matrix-Reloaded-Challenge/blob/9363dded4d8a9305ea3cd07c2e62522adfd99575/output.png))
+![Image Alt](https://github.com/utsav-upadhyay-21/Python-Matrix-Reloaded-Challenge/blob/9363dded4d8a9305ea3cd07c2e62522adfd99575/output.png)
