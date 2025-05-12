@@ -3,13 +3,13 @@
 
 Welcome to the **Matrix Operations Challenge**, hosted as part of the **"Python Matrix Reloaded" Workshop**! This challenge will test your ability to implement and optimize a custom Matrix class in Python.
 
----
+
 
 ## 📅 Deadline
 
 **🕘 Submit before: 9 PM today**
 
----
+
 
 ## 📥 Submission Instructions
 
@@ -24,7 +24,7 @@ report_<Name>_<USN>.md
 
 4. **Create a Pull Request** to this repository **before the deadline**.
 
----
+
 
 ## 🗂️ Files to Submit
 
@@ -37,12 +37,11 @@ Your report should include:
 - Time and memory comparisons (before vs after optimization)
 - Explanation of optimizations and their impact
 
----
 
 ## 💎 Bonus
 
 Re-implement part of your Matrix class in **Cython** for additional performance gains.
 
----
+
 
 Happy Hacking! 🧠💻
