@@ -1,0 +1,560 @@
+"""
+Matrix Challenge Implementation
+Author: SHREYA L
+USN: 1RF23IS081
+
+Dependencies:
+- numpy>=1.21.0
+- matplotlib>=3.4.0
+- seaborn>=0.11.0
+- numba>=0.56.0
+- cupy-cuda11x>=12.0.0  # For CUDA 11.x
+- scipy>=1.7.0
+- mkl-service>=2.4.0
+- blis>=0.7.9
+- psutil>=5.9.0
+- memory-profiler>=0.61.0
+
+Install dependencies using: pip install -r requirements.txt
+"""
+
+import numpy as np
+from typing import Union, List, Tuple, Optional, Dict
+import time
+import tracemalloc
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import seaborn as sns
+from functools import lru_cache
+import threading
+from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
+from multiprocessing import Pool
+import os
+import psutil
+import warnings
+from numba import jit, prange
+import gc
+import weakref
+
+# Configure NumPy for optimal performance
+np.set_printoptions(precision=8, suppress=True)
+np.seterr(divide='ignore', invalid='ignore')
+warnings.filterwarnings('ignore', category=RuntimeWarning)
+
+# Enable threading optimizations
+os.environ['OMP_NUM_THREADS'] = str(multiprocessing.cpu_count())
+os.environ['OPENBLAS_NUM_THREADS'] = str(multiprocessing.cpu_count())
+os.environ['VECLIB_MAXIMUM_THREADS'] = str(multiprocessing.cpu_count())
+
+class MatrixMemoryManager:
+    """Advanced memory management for matrices."""
+    _instance = None
+    _cpu_pool: Dict[Tuple[Tuple[int, ...], np.dtype], List[np.ndarray]] = {}
+    _max_pool_size = 1000
+    
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+    
+    def get_memory_stats(self) -> dict:
+        """Get current memory usage statistics."""
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        
+        stats = {
+            'rss': memory_info.rss / (1024 * 1024),  # Resident Set Size in MB
+            'vms': memory_info.vms / (1024 * 1024),  # Virtual Memory Size in MB
+            'text': memory_info.text / (1024 * 1024) if hasattr(memory_info, 'text') else 0,  # Text Segment in MB
+            'data': memory_info.data / (1024 * 1024) if hasattr(memory_info, 'data') else 0,  # Data Segment in MB
+            'system_memory_percent': psutil.virtual_memory().percent,
+            'system_memory_available': psutil.virtual_memory().available / (1024 * 1024)
+        }
+        if hasattr(memory_info, 'shared'):
+            stats['shared'] = memory_info.shared / (1024 * 1024)
+        return stats
+
+    def get_array(self, shape: Tuple[int, ...], dtype=np.float64) -> np.ndarray:
+        """Get an array from the pool or create a new one."""
+        key = (shape, dtype)
+        if key in self._cpu_pool and self._cpu_pool[key]:
+            return self._cpu_pool[key].pop()
+        return np.empty(shape, dtype=dtype)
+    
+    def return_array(self, array: np.ndarray):
+        """Return an array to the pool."""
+        key = (array.shape, array.dtype)
+        if key not in self._cpu_pool:
+            self._cpu_pool[key] = []
+        if len(self._cpu_pool[key]) < self._max_pool_size:
+            self._cpu_pool[key].append(array)
+    
+    def clear(self):
+        """Clear all pools and force garbage collection."""
+        self._cpu_pool.clear()
+        gc.collect()
+
+# Optimized matrix operations using Numba
+@jit(nopython=True, parallel=True, fastmath=True)
+def _optimized_matrix_multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Optimized matrix multiplication using Numba."""
+    m, n = a.shape
+    n, p = b.shape
+    result = np.zeros((m, p), dtype=np.float64)
+    for i in prange(m):
+        for j in range(p):
+            for k in range(n):
+                result[i, j] += a[i, k] * b[k, j]
+    return result
+
+@jit(nopython=True, parallel=True, fastmath=True)
+def _optimized_element_wise(a: np.ndarray, b: np.ndarray, op: str) -> np.ndarray:
+    """Optimized element-wise operations using Numba."""
+    if op == 'add':
+        return a + b  # Use direct NumPy addition for better performance
+    elif op == 'sub':
+        return a - b  # Use direct NumPy subtraction for better performance
+    elif op == 'mul':
+        return a * b  # Use direct NumPy multiplication for better performance
+    return np.empty_like(a)
+
+class Matrix:
+    """
+    A highly optimized 2D Matrix class supporting basic operations and broadcasting.
+    Uses NumPy and Numba for maximum performance.
+    """
+
+    __slots__ = ['_data', '_shape', '_cached_transpose', '_memory_manager']
+
+    def __init__(self, data: Union[List, np.ndarray]):
+        """Initialize a Matrix with optimized memory management."""
+        self._memory_manager = MatrixMemoryManager.get_instance()
+        self._data = np.array(data, dtype=np.float64)
+        self._shape = self._data.shape
+        self._cached_transpose = None
+
+    def __str__(self) -> str:
+        """Return a formatted string representation of the matrix."""
+        return str(self._data)
+
+    def __repr__(self) -> str:
+        """Return a detailed string representation of the matrix."""
+        return f"Matrix({self._data})"
+
+    def format_matrix(self) -> str:
+        """Return a nicely formatted string representation of the matrix."""
+        rows, cols = self._shape
+        result = []
+        for i in range(rows):
+            row = [f"{self._data[i,j]:.2f}" for j in range(cols)]
+            result.append("  ".join(row))
+        return "\n".join(result)
+
+    def __del__(self):
+        """Clean up resources."""
+        if hasattr(self, '_data'):
+            self._memory_manager.return_array(self._data)
+        if hasattr(self, '_cached_transpose') and self._cached_transpose is not None:
+            self._memory_manager.return_array(self._cached_transpose._data)
+
+    @property
+    def shape(self) -> Tuple[int, ...]:
+        """Return the shape of the matrix."""
+        return self._shape
+
+    def __add__(self, other: 'Matrix') -> 'Matrix':
+        """Add two matrices with broadcasting support using optimized operations."""
+        if isinstance(other, Matrix):
+            # Use direct NumPy addition for better performance
+            result = self._data + other._data
+            return Matrix(result)
+        return Matrix(self._data + np.array(other))
+
+    def __sub__(self, other: 'Matrix') -> 'Matrix':
+        """Subtract two matrices with broadcasting support using optimized operations."""
+        if isinstance(other, Matrix):
+            # Use direct NumPy subtraction for better performance
+            result = self._data - other._data
+            return Matrix(result)
+        return Matrix(self._data - np.array(other))
+
+    def __mul__(self, other: 'Matrix') -> 'Matrix':
+        """Element-wise multiplication with broadcasting support using optimized operations."""
+        if isinstance(other, Matrix):
+            # Use direct NumPy multiplication for better performance
+            result = self._data * other._data
+            return Matrix(result)
+        return Matrix(self._data * np.array(other))
+
+    def __matmul__(self, other: 'Matrix') -> 'Matrix':
+        """Matrix multiplication with parallel processing."""
+        if isinstance(other, Matrix):
+            if self._data.size > 1000000:  # For large matrices, use parallel processing
+                return self._parallel_matmul(other)
+            result = _optimized_matrix_multiply(self._data, other._data)
+            return Matrix(result)
+        return Matrix(_optimized_matrix_multiply(self._data, np.array(other)))
+
+    def _parallel_matmul(self, other: 'Matrix') -> 'Matrix':
+        """Parallel matrix multiplication."""
+        def chunk_multiply(chunk):
+            return _optimized_matrix_multiply(chunk, other._data)
+
+        # Split the first matrix into chunks
+        chunk_size = max(1, self._data.shape[0] // (multiprocessing.cpu_count() * 2))
+        chunks = [self._data[i:i + chunk_size] for i in range(0, self._data.shape[0], chunk_size)]
+
+        # Process chunks in parallel
+        with Pool() as pool:
+            results = pool.map(chunk_multiply, chunks)
+
+        # Combine results
+        return Matrix(np.vstack(results))
+
+    def __pow__(self, power: int) -> 'Matrix':
+        """Raise each element to the specified power using optimized operations."""
+        result = np.power(self._data, power)
+        return Matrix(result)
+
+    @lru_cache(maxsize=128)
+    def transpose(self) -> 'Matrix':
+        """Return the transpose of the matrix with caching."""
+        if self._cached_transpose is None:
+            self._cached_transpose = Matrix(np.transpose(self._data))
+        return self._cached_transpose
+
+    def clear_cache(self):
+        """Clear cached computations."""
+        self._cached_transpose = None
+        self.transpose.cache_clear()
+
+    def get_memory_usage(self) -> dict:
+        """Get memory usage statistics for this matrix."""
+        stats = self._memory_manager.get_memory_stats()
+        matrix_size = self._data.nbytes / (1024 * 1024)  # Size in MB
+        stats['matrix_size'] = matrix_size
+        return stats
+
+class MatrixGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Matrix Operations")
+        self.root.geometry("1400x900")
+        
+        # Set theme colors
+        self.bg_color = "#f0f0f0"
+        self.accent_color = "#4a90e2"
+        self.error_color = "#e74c3c"
+        self.success_color = "#2ecc71"
+        
+        # Configure style
+        self.style = ttk.Style()
+        self.style.configure("TFrame", background=self.bg_color)
+        self.style.configure("TLabelframe", background=self.bg_color)
+        self.style.configure("TLabelframe.Label", background=self.bg_color)
+        self.style.configure("TButton", padding=5, font=('Arial', 10))
+        self.style.configure("TLabel", background=self.bg_color, font=('Arial', 10))
+        
+        # Create main frames
+        self.input_frame = ttk.LabelFrame(root, text="Input Matrices", padding="10")
+        self.input_frame.grid(row=0, column=0, padx=10, pady=5, sticky="nsew")
+        
+        self.operation_frame = ttk.LabelFrame(root, text="Operations", padding="10")
+        self.operation_frame.grid(row=0, column=1, padx=10, pady=5, sticky="nsew")
+        
+        self.output_frame = ttk.LabelFrame(root, text="Results", padding="10")
+        self.output_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky="nsew")
+        
+        # Configure grid weights
+        root.grid_rowconfigure(1, weight=1)
+        root.grid_columnconfigure(0, weight=1)
+        root.grid_columnconfigure(1, weight=1)
+        
+        self.setup_input_fields()
+        self.setup_operation_buttons()
+        self.setup_output_area()
+        self.setup_visualization()
+        
+    def setup_input_fields(self):
+        # Matrix A
+        ttk.Label(self.input_frame, text="Matrix A:", font=('Arial', 11, 'bold')).grid(row=0, column=0, pady=5)
+        self.matrix_a = scrolledtext.ScrolledText(self.input_frame, width=30, height=5, font=('Courier', 10))
+        self.matrix_a.grid(row=1, column=0, padx=5, pady=5)
+        self.matrix_a.insert("1.0", "1 2\n3 4")
+        
+        # Matrix B
+        ttk.Label(self.input_frame, text="Matrix B:", font=('Arial', 11, 'bold')).grid(row=0, column=1, pady=5)
+        self.matrix_b = scrolledtext.ScrolledText(self.input_frame, width=30, height=5, font=('Courier', 10))
+        self.matrix_b.grid(row=1, column=1, padx=5, pady=5)
+        self.matrix_b.insert("1.0", "5 6\n7 8")
+        
+        # Matrix size controls
+        size_frame = ttk.Frame(self.input_frame)
+        size_frame.grid(row=2, column=0, columnspan=2, pady=10)
+        
+        ttk.Label(size_frame, text="Matrix Size:").grid(row=0, column=0, padx=5)
+        self.size_var = tk.StringVar(value="2x2")
+        size_combo = ttk.Combobox(size_frame, textvariable=self.size_var, values=["2x2", "3x3", "4x4"], width=5)
+        size_combo.grid(row=0, column=1, padx=5)
+        ttk.Button(size_frame, text="Apply Size", command=self.apply_matrix_size).grid(row=0, column=2, padx=5)
+        
+        # Power input
+        power_frame = ttk.Frame(self.input_frame)
+        power_frame.grid(row=3, column=0, columnspan=2, pady=5)
+        
+        ttk.Label(power_frame, text="Power (for ** operation):").grid(row=0, column=0, padx=5)
+        self.power_input = ttk.Entry(power_frame, width=10)
+        self.power_input.grid(row=0, column=1, padx=5)
+        self.power_input.insert(0, "2")
+        
+    def setup_operation_buttons(self):
+        operations = [
+            ("Add (A + B)", self.add_matrices),
+            ("Subtract (A - B)", self.subtract_matrices),
+            ("Multiply (A * B)", self.multiply_matrices),
+            ("Matrix Multiply (A @ B)", self.matrix_multiply),
+            ("Power (A ** n)", self.power_matrix),
+            ("Transpose A", self.transpose_matrix),
+            ("Clear All", self.clear_all)
+        ]
+        
+        for i, (text, command) in enumerate(operations):
+            btn = ttk.Button(self.operation_frame, text=text, command=command)
+            btn.grid(row=i, column=0, pady=5, padx=5, sticky="ew")
+            
+    def setup_output_area(self):
+        # Results display
+        result_frame = ttk.Frame(self.output_frame)
+        result_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        
+        ttk.Label(result_frame, text="Operation Result:", font=('Arial', 11, 'bold')).grid(row=0, column=0, sticky="w")
+        self.result_text = scrolledtext.ScrolledText(result_frame, width=80, height=10, font=('Courier', 10))
+        self.result_text.grid(row=1, column=0, sticky="nsew")
+        
+        # Performance metrics
+        metrics_frame = ttk.Frame(self.output_frame)
+        metrics_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        
+        ttk.Label(metrics_frame, text="Performance Metrics:", font=('Arial', 11, 'bold')).grid(row=0, column=0, sticky="w")
+        self.metrics_text = scrolledtext.ScrolledText(metrics_frame, width=80, height=5, font=('Courier', 10))
+        self.metrics_text.grid(row=1, column=0, sticky="nsew")
+        
+        self.output_frame.grid_rowconfigure(0, weight=2)
+        self.output_frame.grid_rowconfigure(1, weight=1)
+        
+    def setup_visualization(self):
+        # Create visualization frame
+        self.viz_frame = ttk.LabelFrame(self.root, text="Matrix Visualization", padding="10")
+        self.viz_frame.grid(row=0, column=2, rowspan=2, padx=10, pady=5, sticky="nsew")
+        
+        # Create matplotlib figure
+        self.fig, self.ax = plt.subplots(figsize=(5, 5))
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.viz_frame)
+        self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        
+        # Configure grid weights for visualization
+        self.root.grid_columnconfigure(2, weight=1)
+        
+    def update_visualization(self, matrix_data):
+        self.ax.clear()
+        sns.heatmap(matrix_data, annot=True, fmt='.2f', cmap='coolwarm', ax=self.ax)
+        self.ax.set_title('Matrix Visualization')
+        self.canvas.draw()
+        
+    def apply_matrix_size(self):
+        try:
+            size = self.size_var.get()
+            rows, cols = map(int, size.split('x'))
+            
+            # Create empty matrices of specified size
+            matrix_a = np.zeros((rows, cols))
+            matrix_b = np.zeros((rows, cols))
+            
+            # Update text fields
+            self.matrix_a.delete("1.0", tk.END)
+            self.matrix_b.delete("1.0", tk.END)
+            
+            # Insert formatted matrices
+            for i in range(rows):
+                self.matrix_a.insert(tk.END, " ".join(["0"] * cols) + "\n")
+                self.matrix_b.insert(tk.END, " ".join(["0"] * cols) + "\n")
+                
+        except Exception as e:
+            self.show_error(f"Error setting matrix size: {str(e)}")
+            
+    def clear_all(self):
+        self.matrix_a.delete("1.0", tk.END)
+        self.matrix_b.delete("1.0", tk.END)
+        self.result_text.delete("1.0", tk.END)
+        self.metrics_text.delete("1.0", tk.END)
+        self.ax.clear()
+        self.canvas.draw()
+        
+    def parse_matrix(self, text):
+        try:
+            rows = text.strip().split('\n')
+            matrix = []
+            for row in rows:
+                if not row.strip():  # Skip empty lines
+                    continue
+                values = [float(x) for x in row.split()]
+                matrix.append(values)
+            
+            if not matrix:  # Check if matrix is empty
+                raise ValueError("Matrix cannot be empty")
+                
+            # Validate matrix shape
+            row_lengths = [len(row) for row in matrix]
+            if len(set(row_lengths)) != 1:
+                raise ValueError("All rows must have the same length")
+                
+            return Matrix(matrix)
+        except ValueError as e:
+            self.show_error(f"Error parsing matrix: {str(e)}")
+            return None
+        except Exception as e:
+            self.show_error(f"Unexpected error: {str(e)}")
+            return None
+            
+    def show_error(self, message):
+        self.result_text.delete("1.0", tk.END)
+        self.result_text.insert("1.0", f"Error: {message}")
+        messagebox.showerror("Error", message)
+        
+    def measure_performance(self, operation_func):
+        try:
+            # Time measurement with high precision
+            start_time = time.perf_counter_ns()
+            
+            # Run operation
+            result = operation_func()
+            
+            # End measurements
+            end_time = time.perf_counter_ns()
+            
+            # Calculate metrics with nanosecond precision
+            time_taken = (end_time - start_time) / 1_000_000  # Convert to ms
+            
+            # Display detailed metrics
+            self.metrics_text.delete("1.0", tk.END)
+            self.metrics_text.insert("1.0", f"Time taken: {time_taken:.3f} ms\n")
+            
+            return result
+        except Exception as e:
+            self.show_error(f"Performance measurement error: {str(e)}")
+            return None
+        
+    def add_matrices(self):
+        def operation():
+            matrix_a = self.parse_matrix(self.matrix_a.get("1.0", tk.END))
+            matrix_b = self.parse_matrix(self.matrix_b.get("1.0", tk.END))
+            if matrix_a and matrix_b:
+                result = matrix_a + matrix_b
+                self.update_visualization(result._data)
+                return result
+            return None
+            
+        result = self.measure_performance(operation)
+        if result:
+            self.result_text.delete("1.0", tk.END)
+            self.result_text.insert("1.0", f"A + B =\n{result.format_matrix()}")
+            
+    def subtract_matrices(self):
+        def operation():
+            matrix_a = self.parse_matrix(self.matrix_a.get("1.0", tk.END))
+            matrix_b = self.parse_matrix(self.matrix_b.get("1.0", tk.END))
+            if matrix_a and matrix_b:
+                result = matrix_a - matrix_b
+                self.update_visualization(result._data)
+                return result
+            return None
+            
+        result = self.measure_performance(operation)
+        if result:
+            self.result_text.delete("1.0", tk.END)
+            self.result_text.insert("1.0", f"A - B =\n{result.format_matrix()}")
+            
+    def multiply_matrices(self):
+        def operation():
+            matrix_a = self.parse_matrix(self.matrix_a.get("1.0", tk.END))
+            matrix_b = self.parse_matrix(self.matrix_b.get("1.0", tk.END))
+            if matrix_a and matrix_b:
+                result = matrix_a * matrix_b
+                self.update_visualization(result._data)
+                return result
+            return None
+            
+        result = self.measure_performance(operation)
+        if result:
+            self.result_text.delete("1.0", tk.END)
+            self.result_text.insert("1.0", f"A * B =\n{result.format_matrix()}")
+            
+    def matrix_multiply(self):
+        def operation():
+            matrix_a = self.parse_matrix(self.matrix_a.get("1.0", tk.END))
+            matrix_b = self.parse_matrix(self.matrix_b.get("1.0", tk.END))
+            if matrix_a and matrix_b:
+                result = matrix_a @ matrix_b
+                self.update_visualization(result._data)
+                return result
+            return None
+            
+        result = self.measure_performance(operation)
+        if result:
+            self.result_text.delete("1.0", tk.END)
+            self.result_text.insert("1.0", f"A @ B =\n{result.format_matrix()}")
+            
+    def power_matrix(self):
+        def operation():
+            matrix_a = self.parse_matrix(self.matrix_a.get("1.0", tk.END))
+            try:
+                power = int(self.power_input.get())
+                if matrix_a:
+                    result = matrix_a ** power
+                    self.update_visualization(result._data)
+                    return result
+            except ValueError:
+                self.show_error("Power must be an integer")
+            return None
+            
+        result = self.measure_performance(operation)
+        if result:
+            self.result_text.delete("1.0", tk.END)
+            self.result_text.insert("1.0", f"A ** {self.power_input.get()} =\n{result.format_matrix()}")
+            
+    def transpose_matrix(self):
+        def operation():
+            matrix_a = self.parse_matrix(self.matrix_a.get("1.0", tk.END))
+            if matrix_a:
+                result = matrix_a.transpose()
+                self.update_visualization(result._data)
+                return result
+            return None
+            
+        result = self.measure_performance(operation)
+        if result:
+            self.result_text.delete("1.0", tk.END)
+            self.result_text.insert("1.0", f"A^T =\n{result.format_matrix()}")
+
+    def clear_cache(self):
+        """Clear all matrix caches."""
+        if hasattr(self, 'last_matrix_a'):
+            self.last_matrix_a.clear_cache()
+        if hasattr(self, 'last_matrix_b'):
+            self.last_matrix_b.clear_cache()
+        self.metrics_text.delete("1.0", tk.END)
+        self.metrics_text.insert("1.0", "Cache cleared successfully")
+
+
+def main():
+    root = tk.Tk()
+    app = MatrixGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
